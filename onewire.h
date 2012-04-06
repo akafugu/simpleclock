@@ -13,7 +13,7 @@ modified by Martin Thomas (mthomas(at)rhrk.uni-kl.de)
 #ifndef ONEWIRE_H__
 #define ONEWIRE_H__
 
-#define W1_PIN	PC3
+#define W1_PIN	PORTC3
 #define W1_IN	PINC
 #define W1_OUT	PORTC
 #define W1_DDR	DDRC
