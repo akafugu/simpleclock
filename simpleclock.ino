@@ -17,10 +17,13 @@
 #include <TWIDisplay.h>
 #include "WireRtcLib.h"
 
+// fixme: make into cpp files
 extern "C" {
   #include "onewire.h"
   #include "button.h"
 }
+
+#include "pitches.h"
 
 WireRtcLib rtc;
 
@@ -28,6 +31,22 @@ WireRtcLib rtc;
 TWIDisplay disp(SLAVE_ADDR);
 
 struct BUTTON_STATE buttons;
+uint8_t g_alarming = false; // alarm is going off
+uint8_t g_alarm_switch;
+bool g_update_rtc = true;
+
+// Cached settings
+uint8_t g_24h_clock = true;
+uint8_t g_show_temp = false;
+uint8_t g_brightness = 10;
+uint8_t g_volume = 0;
+
+#define ALARM_SWITCH_PIN 5 
+#define BUTTON_1_PIN 3
+#define BUTTON_2_PIN 4
+
+#define PIEZO_1 9
+#define PIEZO_2 10
 
 // menu states
 typedef enum {
@@ -40,9 +59,10 @@ typedef enum {
 	STATE_MENU_24H,
 	STATE_MENU_VOL,
 	STATE_MENU_TEMP,
-	STATE_MENU_DOTS,
 	STATE_MENU_LAST,
 } state_t;
+
+state_t clock_state = STATE_CLOCK;
 
 // display modes
 typedef enum {
@@ -53,25 +73,35 @@ typedef enum {
 
 display_mode_t clock_mode = MODE_NORMAL;
 
+#define MENU_TIMEOUT 160
+
 void setup()
 {
-  pinMode(3, INPUT);
-  pinMode(4, INPUT);
-  pinMode(5, INPUT);
+  pinMode(PIEZO_1, OUTPUT);
+  pinMode(PIEZO_2, OUTPUT);
+  digitalWrite(PIEZO_2, LOW);
+  
+  pinMode(BUTTON_1_PIN, INPUT);
+  pinMode(BUTTON_2_PIN, INPUT);
+  pinMode(ALARM_SWITCH_PIN, INPUT);
   
   // enable pull-ups
-  digitalWrite(3, HIGH);
-  digitalWrite(4, HIGH);
-  digitalWrite(5, HIGH);
+  digitalWrite(BUTTON_1_PIN, HIGH);
+  digitalWrite(BUTTON_2_PIN, HIGH);
+  digitalWrite(ALARM_SWITCH_PIN, HIGH);
   
   Wire.begin();
   rtc.begin();
+  rtc.runClock(true);
   
-  //rtc.setTime_s(22, 49, 00);
-  disp.setBrightness(255);
+  disp.setRotateMode();
+  disp.setBrightness(100);
   disp.clear();
+  //disp.begin(8);
 
   rtc.setDS1307();
+  rtc.SQWSetFreq(WireRtcLib::FREQ_1);
+  rtc.SQWEnable(true);
   
   start_meas();
   read_meas();
@@ -96,81 +126,347 @@ void setup()
   
   TIMSK2 |= (1<<TOIE2);  
   
-  /*
-  g_alarm_switch = get_alarm_switch();
+  g_alarm_switch = !digitalRead(ALARM_SWITCH_PIN);
 
-  // set up interrupt for alarm switch
+  // set up interrupt for alarm switch and RTC SQW
   PCICR |= (1 << PCIE2);
   PCMSK2 |= (1 << PCINT18);
-  */
+  PCMSK2 |= (1 << PCINT21);
   
+  /*
+  disp.print("----");
+  tone(9, NOTE_A4, 500);
+  delay(100);
+  tone(9, NOTE_C3, 750);
+  delay(100);
+  tone(9, NOTE_A4, 500);
+  delay(500);
+  */
 }
 
-/*
-// Alarm switch changed interrupt
+// Alarm switch changed / SQW interrupt
 ISR( PCINT2_vect )
 {
-	if ( (SWITCH_PIN & _BV(SWITCH_BIT)) == 0)
-		g_alarm_switch = false;
-	else
-		g_alarm_switch = true;
+  g_alarm_switch = !digitalRead(ALARM_SWITCH_PIN);
+  g_update_rtc = true;
 }
-*/
 
 ISR(TIMER2_OVF_vect) {
   button_timer();
-}  
+}
 
+void printRightJustified(int num)
+{
+  disp.setPosition(0);
+  
+  if (num < 10)
+    disp.print(' ');
+  if (num < 100)
+    disp.print(' ');
+  if (num < 1000)
+    disp.print(' ');
+
+  disp.print(num);  
+}
+
+void printRightJustified(const char* str)
+{
+  size_t len = strlen(str);
+  
+  if (len < 2)
+    disp.print(' ');
+  if (len < 3)
+    disp.print(' ');
+  if (len < 4)
+    disp.print(' ');
+  
+  disp.print(str);
+}
+
+void print2(int num)
+{
+  if (num < 10)
+    disp.print('0');
+   disp.print(num); 
+}
+
+void alarm()
+{
+  tone(9, NOTE_A4, 500);
+  delay(100);
+  tone(9, NOTE_C3, 750);
+  delay(100);
+  tone(9, NOTE_A4, 500);
+  delay(500);
+}
+
+void read_rtc(uint8_t mode)
+{
+  static uint8_t counter = 0;
+  
+  disp.setDot(3, g_alarm_switch);
+  
+  if (!g_show_temp || counter < 25) {
+    WireRtcLib::tm* t = rtc.getTime();
+    
+    if (clock_mode == MODE_NORMAL) {
+      if (g_24h_clock)
+        disp.writeTime(t->hour, t->min, t->sec);
+      else
+        disp.writeTime(t->twelveHour, t->min, t->sec);
+    }
+    else {
+      disp.setPosition(0);
+      disp.print(' ');
+      print2(t->sec);
+      disp.print(' ');
+      disp.setDot(1, false);
+    }
+  }
+  else {
+    // Read temperature from 1-wire temperature sensor
+    start_meas();
+    uint16_t temp = read_meas();
+
+    disp.clear();
+    disp.print(temp/10, DEC);
+    disp.print('C');
+    disp.setDot(1, true);
+  }
+
+  counter++;
+  if (counter == 50) counter = 0;
+}
+
+void set_blink(bool on)
+{
+  
+}
+
+void show_setting(const char* str, int value, bool show_setting)
+{
+  disp.clear();
+  if (show_setting)
+    printRightJustified(value);
+  else
+    disp.print(str);
+}
+
+void show_setting(const char* str, const char* value, bool show_setting)
+{
+  disp.clear();
+  if (show_setting)
+    printRightJustified(value);
+  else
+    disp.print(str);
+}
 
 void menu_loop()
 {
+  uint8_t hour = 0, min = 0, sec = 0;
+
+  // Counters used when setting time
+  int16_t time_to_set = 0;
+  uint16_t button_released_timer = 0;
+  uint16_t button_speed = 25;
+
   while (1) {
-   
-  } 
+    get_button_state(&buttons);
+
+    // When alarming:
+    // any button press cancels alarm
+    if (g_alarming) {
+      read_rtc(clock_mode);
+
+      if (buttons.b1_keydown || buttons.b1_keyup || buttons.b2_keydown || buttons.b2_keyup) {
+        buttons.b1_keyup = 0; // clear state
+        buttons.b2_keyup = 0; // clear state
+        g_alarming = false;
+        continue;
+      }
+      else {
+        alarm();
+      }
+    }
+    // If both buttons are held:
+    //  * If the ALARM BUTTON SWITCH is on the LEFT, go into set time mode
+    //  * If the ALARM BUTTON SWITCH is on the RIGHT, go into set alarm mode
+    else if (clock_state == STATE_CLOCK && buttons.both_held) {
+      if (g_alarm_switch) {
+        clock_state = STATE_SET_ALARM;
+        disp.clear();
+        disp.print("ALRM");
+        rtc.getAlarm_s(&hour, &min, &sec);
+        time_to_set = hour*60 + min;
+      }
+      else {
+        clock_state = STATE_SET_CLOCK;
+        disp.clear();
+        disp.print("TIME");
+        rtc.getTime_s(&hour, &min, &sec);
+        time_to_set = hour*60 + min;
+      }
+      
+      set_blink(true);
+			
+      // wait until both buttons are released
+      while (1) {
+        delay(50);
+        get_button_state(&buttons);
+        if (buttons.none_held)
+          break;
+      }
+    }
+    // Set time or alarm
+    else if (clock_state == STATE_SET_CLOCK || clock_state == STATE_SET_ALARM) {
+      // Check if we should exit STATE_SET_CLOCK or STATE_SET_ALARM
+      if (buttons.none_held) {
+        set_blink(true);
+        button_released_timer++;
+        button_speed = 25;
+      }
+      else {
+        set_blink(false);
+        button_released_timer = 0;
+        button_speed++;
+      }
+      // exit mode after no button has been touched for a while
+      if (button_released_timer >= MENU_TIMEOUT) {
+        set_blink(false);
+        button_released_timer = 0;
+        button_speed = 1;
+				
+        if (clock_state == STATE_SET_CLOCK)
+          rtc.setTime_s(time_to_set / 60, time_to_set % 60, 0);
+	else
+          rtc.setAlarm_s(time_to_set / 60, time_to_set % 60, 0);
+
+        clock_state = STATE_CLOCK;
+      }
+
+      // Increase / Decrease time counter
+      if (buttons.b1_repeat) time_to_set+=(button_speed/50);
+      if (buttons.b1_keyup)  time_to_set++;
+      if (buttons.b2_repeat) time_to_set-=(button_speed/50);
+      if (buttons.b2_keyup)  time_to_set--;
+
+      if (time_to_set  >= 1440) time_to_set = 0;
+      if (time_to_set  < 0) time_to_set = 1439;
+
+      disp.setPosition(0);
+      print2(time_to_set/60);
+      print2(time_to_set%60);
+      
+      disp.setDot(1, true);
+    }
+    // Left button enters menu
+    else if (clock_state == STATE_CLOCK && buttons.b2_keyup) {
+      clock_state = STATE_MENU_BRIGHTNESS;
+      show_setting("BRIT", g_brightness, false);
+      buttons.b2_keyup = 0; // clear state
+    }
+    // Right button toggles display mode
+    else if (clock_state == STATE_CLOCK && buttons.b1_keyup) {
+      clock_mode = (display_mode_t)(clock_mode + 1);
+      if (clock_mode == MODE_LAST) clock_mode = MODE_NORMAL;
+        buttons.b1_keyup = 0; // clear state
+    }
+    else if (clock_state >= STATE_MENU_BRIGHTNESS) {
+      if (buttons.none_held)
+        button_released_timer++;
+      else
+        button_released_timer = 0;
+
+      if (button_released_timer >= MENU_TIMEOUT) {
+        button_released_timer = 0;
+        clock_state = STATE_CLOCK;
+      }
+    
+      switch (clock_state) {
+        case STATE_MENU_BRIGHTNESS:
+          if (buttons.b1_keyup) {
+            g_brightness++;
+            buttons.b1_keyup = false;
+          
+            if (g_brightness > 10) g_brightness = 1;
+
+            //eeprom_update_byte(&b_brightness, g_brightness);
+            show_setting("BRIT", g_brightness, true);
+            disp.setBrightness(g_brightness*10);
+          }
+	  break;
+        case STATE_MENU_24H:
+          if (buttons.b1_keyup) {
+            g_24h_clock = !g_24h_clock;
+            //eeprom_update_byte(&b_24h_clock, g_24h_clock);
+						
+            show_setting("24H", g_24h_clock ? " on" : " off", true);
+            buttons.b1_keyup = false;
+          }
+          break;
+        case STATE_MENU_VOL:
+          if (buttons.b1_keyup) {
+            g_volume = !g_volume;
+            //eeprom_update_byte(&b_volume, g_volume);
+          
+            show_setting("VOL", g_volume ? " hi" : " lo", true);
+            //piezo_init();
+            //beep(1000, 1);
+            buttons.b1_keyup = false;
+          }
+          break;
+        case STATE_MENU_TEMP:
+          if (buttons.b1_keyup) {
+            g_show_temp = !g_show_temp;
+            //eeprom_update_byte(&b_show_temp, g_show_temp);
+            
+            show_setting("TEMP", g_show_temp ? " on" : " off", true);
+            buttons.b1_keyup = false;
+          }
+          break;
+        default:
+          break; // do nothing
+      }
+    
+      if (buttons.b2_keyup) {
+        clock_state = (state_t)(clock_state + 1);
+      
+        if (clock_state == STATE_MENU_LAST) clock_state = STATE_MENU_BRIGHTNESS;
+      
+        switch (clock_state) {
+          case STATE_MENU_BRIGHTNESS:
+            show_setting("BRIT", g_brightness, false);
+            break;
+          case STATE_MENU_VOL:
+            show_setting("VOL", g_volume ? " hi" : " lo", false);
+            break;
+          case STATE_MENU_24H:
+            show_setting("24H", g_24h_clock ? " on" : " off", false);
+            break;
+            case STATE_MENU_TEMP:
+              show_setting("TEMP", g_show_temp ? " on" : " off", false);
+              break;
+            default:
+              break; // do nothing
+        }
+
+        buttons.b2_keyup = 0; // clear state
+      }
+    }
+    else if (g_update_rtc) {
+      read_rtc(clock_mode);
+      g_update_rtc = false;
+    }
+    
+    if (g_alarm_switch && rtc.checkAlarm())
+      g_alarming = true;
+      
+    delay(10);
+  }
 }
 
 void loop()
 {
-  for (int i = 0; i < 40; i++) {
-    WireRtcLib::tm* t = rtc.getTime();
-
-    get_button_state(&buttons);
-
-
-    if (buttons.both_held) {
-      disp.clear();
-      disp.print("----");
-    }
-    // Right button toggles display mode
-    else if (/*clock_state == STATE_CLOCK &&*/ buttons.b1_keyup) {
-      if (clock_mode == MODE_NORMAL) clock_mode = MODE_SECONDS;
-      else if (clock_mode == MODE_SECONDS) clock_mode = MODE_NORMAL;
-      buttons.b1_keyup = 0; // clear state
-    }
-    else if (i < 20) {
-      if (clock_mode == MODE_NORMAL)
-        disp.writeTime(t->hour, t->min, t->sec);
-      else {
-        disp.clear();
-        disp.print(' ');
-        if (t->sec < 10) disp.print('0');
-        disp.print(t->sec);
-      }
-    }
-    else {
-      // Read temperature from 1-wire temperature sensor
-      start_meas();
-      uint16_t temp = read_meas();
-
-      disp.clear();
-      disp.print(temp/10, DEC);
-      disp.print('C');
-      disp.setDot(1, true);
-    }
-    
-    //if (digitalRead(5)) disp.setDot(3, true);
-    
-    delay(200);
-  }
+  menu_loop();
 }
 
