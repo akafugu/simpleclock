@@ -13,6 +13,7 @@
  *
  */
 
+#include <EEPROM.h>
 #include <Wire.h>
 #include <TWIDisplay.h>
 #include <WireRtcLib.h>
@@ -36,9 +37,14 @@ uint8_t g_24h_clock = true;
 uint8_t g_show_temp = false;
 uint8_t g_brightness = 10;
 
-#define ALARM_SWITCH_PIN 5 
+#define CLOCK_MODE_POS 0
+#define SHOW_TEMP_POS 1
+#define BRIGHTNESS_POS 2
+
+#define SQW_PIN 2
 #define BUTTON_1_PIN 3
 #define BUTTON_2_PIN 4
+#define ALARM_SWITCH_PIN 5 
 
 #define PIEZO_1 9
 #define PIEZO_2 10
@@ -68,9 +74,13 @@ typedef enum {
 
 display_mode_t clock_mode = MODE_NORMAL;
 
+bool g_blink;
+bool g_blank;
+
 #define MENU_TIMEOUT 160
 
 WireRtcLib::tm* t;
+uint16_t temp;
 
 void setup()
 {
@@ -92,7 +102,6 @@ void setup()
   rtc.runClock(true);
   
   disp.setRotateMode();
-  disp.setBrightness(100);
   disp.clear();
   //disp.begin(8);
 
@@ -130,6 +139,14 @@ void setup()
   PCMSK2 |= (1 << PCINT18);
   PCMSK2 |= (1 << PCINT21);
   
+  
+  g_24h_clock = EEPROM.read(CLOCK_MODE_POS);	
+  g_show_temp = EEPROM.read(SHOW_TEMP_POS);	
+  g_brightness = EEPROM.read(BRIGHTNESS_POS);
+
+  if (g_brightness > 10 || g_brightness < 0) g_brightness = 10;
+  disp.setBrightness(g_brightness*10);
+
   /*
   disp.print("----");
   tone(9, NOTE_A4, 500);
@@ -140,7 +157,7 @@ void setup()
   delay(500);
   */
   
-  t = rtc.getTime();
+  update_time();
 }
 
 // Alarm switch changed / SQW interrupt
@@ -148,6 +165,8 @@ ISR( PCINT2_vect )
 {
   g_alarm_switch = !digitalRead(ALARM_SWITCH_PIN);
   g_update_rtc = true;
+
+  g_blank = digitalRead(SQW_PIN);
 }
 
 ISR(TIMER2_OVF_vect) {
@@ -191,11 +210,7 @@ void print2(int num)
 
 void print_temp()
 {
-    // Read temperature from 1-wire temperature sensor
-    start_meas();
-    uint16_t temp = read_meas();
-
-    disp.clear();
+    disp.setPosition(0);
     disp.print(temp/10, DEC);
     disp.print('C');
     disp.setDot(1, true);
@@ -252,7 +267,7 @@ void update_display(uint8_t mode)
 
 void set_blink(bool on)
 {
-  
+  g_blink = on;
 }
 
 void show_setting(const char* str, int value, bool show_setting)
@@ -273,6 +288,18 @@ void show_setting(const char* str, const char* value, bool show_setting)
     disp.print(str);
 }
 
+void update_time()
+{
+  // update time
+  t = rtc.getTime();
+      
+  // Read temperature from 1-wire temperature sensor
+  start_meas();
+  temp = read_meas();
+
+  g_update_rtc = false;  
+}
+
 void loop()
 {
   uint8_t hour = 0, min = 0, sec = 0;
@@ -284,6 +311,10 @@ void loop()
 
   while (1) {
     get_button_state(&buttons);
+
+    if (g_update_rtc) {
+      update_time();
+    }
 
     // When alarming:
     // any button press cancels alarm
@@ -402,7 +433,7 @@ void loop()
           
             if (g_brightness > 10) g_brightness = 1;
 
-            //eeprom_update_byte(&b_brightness, g_brightness);
+            EEPROM.write(BRIGHTNESS_POS, g_brightness);
             show_setting("BRIT", g_brightness, true);
             disp.setBrightness(g_brightness*10);
           }
@@ -410,8 +441,8 @@ void loop()
         case STATE_MENU_24H:
           if (buttons.b1_keyup) {
             g_24h_clock = !g_24h_clock;
-            //eeprom_update_byte(&b_24h_clock, g_24h_clock);
-						
+					
+            EEPROM.write(CLOCK_MODE_POS, g_24h_clock);	
             show_setting("24H", g_24h_clock ? " on" : " off", true);
             buttons.b1_keyup = false;
           }
@@ -419,8 +450,8 @@ void loop()
         case STATE_MENU_TEMP:
           if (buttons.b1_keyup) {
             g_show_temp = !g_show_temp;
-            //eeprom_update_byte(&b_show_temp, g_show_temp);
             
+            EEPROM.write(SHOW_TEMP_POS, g_show_temp);
             show_setting("TEMP", g_show_temp ? " on" : " off", true);
             buttons.b1_keyup = false;
           }
@@ -451,10 +482,9 @@ void loop()
         buttons.b2_keyup = 0; // clear state
       }
     }
-    else if (g_update_rtc) {
-      t = rtc.getTime();
+    else {
       update_display(clock_mode);
-      g_update_rtc = false;
+      delay(100);
     }
     
     if (g_alarm_switch && rtc.checkAlarm())
