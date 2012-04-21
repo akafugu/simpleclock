@@ -15,7 +15,7 @@
 
 #include <Wire.h>
 #include <TWIDisplay.h>
-#include "WireRtcLib.h"
+#include <WireRtcLib.h>
 
 // fixme: make into cpp files
 extern "C" {
@@ -39,7 +39,6 @@ bool g_update_rtc = true;
 uint8_t g_24h_clock = true;
 uint8_t g_show_temp = false;
 uint8_t g_brightness = 10;
-uint8_t g_volume = 0;
 
 #define ALARM_SWITCH_PIN 5 
 #define BUTTON_1_PIN 3
@@ -57,7 +56,6 @@ typedef enum {
 	// menu
 	STATE_MENU_BRIGHTNESS,
 	STATE_MENU_24H,
-	STATE_MENU_VOL,
 	STATE_MENU_TEMP,
 	STATE_MENU_LAST,
 } state_t;
@@ -66,14 +64,17 @@ state_t clock_state = STATE_CLOCK;
 
 // display modes
 typedef enum {
-	MODE_NORMAL = 0, // HH.MM
-	MODE_SECONDS,    //  SS 
-	MODE_LAST,
+  MODE_NORMAL = 0, // HH.MM
+  MODE_SECONDS,    //  SS 
+  MODE_TEMP,       // XX.XC
+  MODE_LAST,
 } display_mode_t;
 
 display_mode_t clock_mode = MODE_NORMAL;
 
 #define MENU_TIMEOUT 160
+
+WireRtcLib::tm* t;
 
 void setup()
 {
@@ -142,6 +143,8 @@ void setup()
   tone(9, NOTE_A4, 500);
   delay(500);
   */
+  
+  t = rtc.getTime();
 }
 
 // Alarm switch changed / SQW interrupt
@@ -190,6 +193,18 @@ void print2(int num)
    disp.print(num); 
 }
 
+void print_temp()
+{
+    // Read temperature from 1-wire temperature sensor
+    start_meas();
+    uint16_t temp = read_meas();
+
+    disp.clear();
+    disp.print(temp/10, DEC);
+    disp.print('C');
+    disp.setDot(1, true);
+}
+
 void alarm()
 {
   tone(9, NOTE_A4, 500);
@@ -200,38 +215,39 @@ void alarm()
   delay(500);
 }
 
-void read_rtc(uint8_t mode)
+void update_display(uint8_t mode)
 {
   static uint8_t counter = 0;
   
   disp.setDot(3, g_alarm_switch);
   
   if (!g_show_temp || counter < 25) {
-    WireRtcLib::tm* t = rtc.getTime();
-    
     if (clock_mode == MODE_NORMAL) {
       if (g_24h_clock)
         disp.writeTime(t->hour, t->min, t->sec);
       else
         disp.writeTime(t->twelveHour, t->min, t->sec);
     }
-    else {
+    else if (clock_mode == MODE_SECONDS) {
       disp.setPosition(0);
-      disp.print(' ');
-      print2(t->sec);
-      disp.print(' ');
+
+      if (g_24h_clock) {
+        disp.print(' ');
+        print2(t->sec);
+        disp.print(' ');
+      }
+      else {
+        disp.print(t->am ? "AM" : "PM");
+        print2(t->sec);
+      }
       disp.setDot(1, false);
+    }
+    else {
+      print_temp();
     }
   }
   else {
-    // Read temperature from 1-wire temperature sensor
-    start_meas();
-    uint16_t temp = read_meas();
-
-    disp.clear();
-    disp.print(temp/10, DEC);
-    disp.print('C');
-    disp.setDot(1, true);
+    print_temp();
   }
 
   counter++;
@@ -261,7 +277,7 @@ void show_setting(const char* str, const char* value, bool show_setting)
     disp.print(str);
 }
 
-void menu_loop()
+void loop()
 {
   uint8_t hour = 0, min = 0, sec = 0;
 
@@ -276,7 +292,7 @@ void menu_loop()
     // When alarming:
     // any button press cancels alarm
     if (g_alarming) {
-      read_rtc(clock_mode);
+      update_display(clock_mode);
 
       if (buttons.b1_keydown || buttons.b1_keyup || buttons.b2_keydown || buttons.b2_keyup) {
         buttons.b1_keyup = 0; // clear state
@@ -404,17 +420,6 @@ void menu_loop()
             buttons.b1_keyup = false;
           }
           break;
-        case STATE_MENU_VOL:
-          if (buttons.b1_keyup) {
-            g_volume = !g_volume;
-            //eeprom_update_byte(&b_volume, g_volume);
-          
-            show_setting("VOL", g_volume ? " hi" : " lo", true);
-            //piezo_init();
-            //beep(1000, 1);
-            buttons.b1_keyup = false;
-          }
-          break;
         case STATE_MENU_TEMP:
           if (buttons.b1_keyup) {
             g_show_temp = !g_show_temp;
@@ -437,9 +442,6 @@ void menu_loop()
           case STATE_MENU_BRIGHTNESS:
             show_setting("BRIT", g_brightness, false);
             break;
-          case STATE_MENU_VOL:
-            show_setting("VOL", g_volume ? " hi" : " lo", false);
-            break;
           case STATE_MENU_24H:
             show_setting("24H", g_24h_clock ? " on" : " off", false);
             break;
@@ -454,7 +456,8 @@ void menu_loop()
       }
     }
     else if (g_update_rtc) {
-      read_rtc(clock_mode);
+      t = rtc.getTime();
+      update_display(clock_mode);
       g_update_rtc = false;
     }
     
@@ -463,10 +466,5 @@ void menu_loop()
       
     delay(10);
   }
-}
-
-void loop()
-{
-  menu_loop();
 }
 
