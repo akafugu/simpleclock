@@ -8,6 +8,8 @@ modified by Martin Thomas (mthomas(at)rhrk.uni-kl.de)
           use of atomic.h macros, internal pull-up support
  7/2010 - added method to skip recovery time after last bit transfered
           via ow_command_skip_last_recovery
+
+  Modified by Akafugu Corporation for use with simpleclock
 */
 
 #include <inttypes.h>

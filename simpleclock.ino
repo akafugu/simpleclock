@@ -1,5 +1,5 @@
 /*
- * simpleclock - clock backpack for the TWIDisplay
+ * simpleclock - clock backpack for TWIDisplay
  * (C) 2012 Akafugu Corporation
  *
  * This program is free software; you can redistribute it and/or modify it under the
