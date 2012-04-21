@@ -17,12 +17,8 @@
 #include <TWIDisplay.h>
 #include <WireRtcLib.h>
 
-// fixme: make into cpp files
-extern "C" {
-  #include "onewire.h"
-  #include "button.h"
-}
-
+#include "onewire.h"
+#include "button.h"
 #include "pitches.h"
 
 WireRtcLib rtc;
