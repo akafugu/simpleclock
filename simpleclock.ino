@@ -8,7 +8,7 @@
  * version.
  *
  * This program is distributed in the hope that it will be useful, but WITHOUT ANY
- * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR Aw
  * PARTICULAR PURPOSE.  See the GNU General Public License for more details.
  *
  */
@@ -74,8 +74,8 @@ typedef enum {
 
 display_mode_t clock_mode = MODE_NORMAL;
 
-bool g_blink;
-bool g_blank;
+bool g_blink; // flag to control when to blink the display
+bool g_blank; // flag to control if the display is to blanked out or not
 
 #define MENU_TIMEOUT 160
 
@@ -147,7 +147,6 @@ void setup()
   if (g_brightness > 10 || g_brightness < 0) g_brightness = 10;
   disp.setBrightness(g_brightness*10);
 
-  /*
   disp.print("----");
   tone(9, NOTE_A4, 500);
   delay(100);
@@ -155,7 +154,6 @@ void setup()
   delay(100);
   tone(9, NOTE_A4, 500);
   delay(500);
-  */
   
   update_time();
 }
@@ -232,7 +230,7 @@ void update_display(uint8_t mode)
   
   disp.setDot(3, g_alarm_switch);
   
-  if (!g_show_temp || counter < 25) {
+  if (!g_show_temp || counter < 40) {
     if (clock_mode == MODE_NORMAL) {
       if (g_24h_clock)
         disp.writeTime(t->hour, t->min, t->sec);
@@ -262,7 +260,7 @@ void update_display(uint8_t mode)
   }
 
   counter++;
-  if (counter == 50) counter = 0;
+  if (counter == 80) counter = 0;
 }
 
 void set_blink(bool on)
@@ -332,8 +330,8 @@ void loop()
       }
     }
     // If both buttons are held:
-    //  * If the ALARM BUTTON SWITCH is on the LEFT, go into set time mode
-    //  * If the ALARM BUTTON SWITCH is on the RIGHT, go into set alarm mode
+    //  * If the ALARM BUTTON SWITCH is on the BOTTOM, go into set time mode
+    //  * If the ALARM BUTTON SWITCH is on the TOP, go into set alarm mode
     else if (clock_state == STATE_CLOCK && buttons.both_held) {
       if (g_alarm_switch) {
         clock_state = STATE_SET_ALARM;
@@ -396,11 +394,16 @@ void loop()
       if (time_to_set  >= 1440) time_to_set = 0;
       if (time_to_set  < 0) time_to_set = 1439;
 
-      disp.setPosition(0);
-      print2(time_to_set/60);
-      print2(time_to_set%60);
+      if (g_blink && g_blank) {
+        disp.clear();
+      }
+      else {
+        disp.setPosition(0);
+        print2(time_to_set/60);
+        print2(time_to_set%60);
       
-      disp.setDot(1, true);
+        disp.setDot(1, true);
+      }
     }
     // Left button enters menu
     else if (clock_state == STATE_CLOCK && buttons.b2_keyup) {
