@@ -22,6 +22,7 @@ Arduino, or on OS X by selecting "Show Package Contents".
 
 Add the following to the end of boards.txt
 
+<code>
 ##############################################################
 
 simpleclock.name=Akafugu Simpleclock (Internal 8MHz Clock)
@@ -42,5 +43,6 @@ simpleclock.build.mcu=atmega328p
 simpleclock.build.f_cpu=8000000L
 simpleclock.build.core=arduino
 simpleclock.build.variant=standard
+</code>
 
 Now select "Akafugu Simpleclock (Internal 8MHz Clock) in the Boards menu.
