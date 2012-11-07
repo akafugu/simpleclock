@@ -18,6 +18,7 @@
  * 06nov2012 - new menu code, 12 hour time display no leading zero
  *
  */
+#define FEATURE_AUTO_DST
 
 #include <EEPROM.h>
 #include <Wire.h>
@@ -27,6 +28,9 @@
 #include "onewire.h"
 #include "button.h"
 #include "pitches.h"
+#ifdef FEATURE_AUTO_DST
+#include "adst.h"
+#endif
 
 WireRtcLib rtc;
 
@@ -39,13 +43,38 @@ uint8_t g_alarm_switch;
 bool g_update_rtc = true;
 
 // Cached settings
-uint8_t g_24h_clock = true;
+uint8_t g_24h_clock = false;  // wbp temp ???
 uint8_t g_show_temp = false;
 uint8_t g_brightness = 10;
+
+#ifdef FEATURE_AUTO_DST
+uint8_t g_dateyear = 12;
+uint8_t g_datemonth = 1;
+uint8_t g_dateday = 1;
+uint8_t g_DST_mode;  // DST off, on, auto?
+uint8_t g_DST_offset;  // DST offset in Hours
+uint8_t g_DST_updated = false;  // DST update flag = allow update only once per day
+//DST_Rules dst_rules = {{10,1,1,2},{4,1,1,2},1};   // DST Rules for parts of OZ including NSW (for JG)
+DST_Rules dst_rules = {{3,1,2,2},{11,1,1,2},1};   // initial values from US DST rules as of 2011
+// DST Rules: Start(month, dotw, week, hour), End(month, dotw, week, hour), Offset
+// DOTW is Day of the Week, 1=Sunday, 7=Saturday
+// N is which occurrence of DOTW
+// Current US Rules:  March, Sunday, 2nd, 2am, November, Sunday, 1st, 2 am, 1 hour
+const DST_Rules dst_rules_lo = {{1,1,1,0},{1,1,1,0},0};  // low limit
+const DST_Rules dst_rules_hi = {{12,7,5,23},{12,7,5,23},1};  // high limit
+#endif
 
 #define CLOCK_MODE_POS 0
 #define SHOW_TEMP_POS 1
 #define BRIGHTNESS_POS 2
+#ifdef FEATURE_AUTO_DST
+#define DATE_YEAR_POS 3
+#define DATE_MONTH_POS 4
+#define DATE_DAY_POS 5
+#define DST_MODE_POS 6
+#define DST_OFFSET_POS 7
+#define DST_UPDATED_POS 8
+#endif
 
 #define SQW_PIN 2
 #define BUTTON_1_PIN 3
@@ -57,15 +86,21 @@ uint8_t g_brightness = 10;
 
 // menu states
 typedef enum {
-	// basic states
-	STATE_CLOCK = 0,
-	STATE_SET_CLOCK,
-	STATE_SET_ALARM,
-	// menu
-	STATE_MENU_BRIGHTNESS,
-	STATE_MENU_24H,
-	STATE_MENU_TEMP,
-	STATE_MENU_LAST,
+  // basic states
+  STATE_CLOCK = 0,
+  STATE_SET_CLOCK,
+  STATE_SET_ALARM,
+  // menu
+  STATE_MENU_BRIGHTNESS,
+  STATE_MENU_24H,
+#ifdef FEATURE_AUTO_DST
+  STATE_MENU_YEAR,
+  STATE_MENU_MONTH,
+  STATE_MENU_DAY,
+  STATE_MENU_DST,
+#endif 
+  STATE_MENU_TEMP,
+  STATE_MENU_LAST,
 } state_t;
 
 state_t clock_state = STATE_CLOCK;
@@ -84,7 +119,7 @@ display_mode_t clock_mode = MODE_NORMAL;
 bool g_blink; // flag to control when to blink the display
 bool g_blank; // flag to control if the display is to blanked out or not
 
-#define MENU_TIMEOUT 160
+#define MENU_TIMEOUT 200  // (160?)
 
 WireRtcLib::tm* t;
 uint16_t temp;
@@ -150,6 +185,19 @@ void setup()
   g_24h_clock = EEPROM.read(CLOCK_MODE_POS);	
   g_show_temp = EEPROM.read(SHOW_TEMP_POS);	
   g_brightness = EEPROM.read(BRIGHTNESS_POS);
+
+#ifdef FEATURE_AUTO_DST
+  g_dateyear = EEPROM.read(DATE_YEAR_POS);
+  if (g_dateyear>29)  g_dateyear = 12;
+  g_datemonth = EEPROM.read(DATE_MONTH_POS);
+  if (g_datemonth>12)  g_dateyear = 1;
+  g_dateday = EEPROM.read(DATE_DAY_POS);
+  if (g_dateday>31)  g_dateyear = 1;
+  g_DST_mode = EEPROM.read(DST_MODE_POS);
+  g_DST_offset = EEPROM.read(DST_OFFSET_POS);
+  if (g_DST_offset>1)  g_DST_offset = 0;
+  g_DST_updated = EEPROM.read(DST_UPDATED_POS);
+#endif
 
   if (g_brightness > 10 || g_brightness < 0) g_brightness = 10;
   disp.setBrightness(g_brightness*10);
@@ -242,7 +290,7 @@ void update_display(uint8_t mode)
       if (g_24h_clock)
         disp.writeTime(t->hour, t->min, t->sec);
       else
-        disp.writeTime12h(t->hour, t->min, t->sec);
+        disp.writeTime12h(t->twelveHour, t->min, t->sec);
     }
     else if (clock_mode == MODE_SECONDS) {
       disp.setPosition(0);
@@ -302,8 +350,61 @@ void update_time()
   start_meas();
   temp = read_meas();
 
+#ifdef FEATURE_AUTO_DST
+  g_dateyear = t->year;  // save year for Menu
+  g_datemonth = t->mon;  // save month for Menu
+  g_dateday = t->mday;  // save day for Menu
+  if (t->sec%10 == 0)  // check DST Offset every 10 seconds
+    setDSToffset(g_DST_mode); 
+  if ((t->hour == 0) && (t->min == 0) && (t->sec == 0)) {  // MIDNIGHT!
+    g_DST_updated = false;
+    DSTinit(t, &dst_rules);  // re-compute DST start, end
+  }
+#endif
+
   g_update_rtc = false;  
 }
+
+#ifdef FEATURE_AUTO_DST
+void setDSToffset(uint8_t mode) {
+  int8_t adjOffset;
+  uint8_t newOffset;
+  if (mode == 2) {  // Auto DST
+    if (g_DST_updated) return;  // already done it once today
+    if (t == NULL) return;  // safet check
+    newOffset = getDSToffset(t, &dst_rules);  // get current DST offset based on DST Rules
+  }
+  else
+    newOffset = mode;  // 0 or 1
+  adjOffset = newOffset - g_DST_offset;  // offset delta
+  if (adjOffset == 0)  return;  // nothing to do
+  if (adjOffset > 0)
+    tone(9, NOTE_A5, 100);  // spring ahead
+  else
+    tone(9, NOTE_A4, 100);  // fall back
+  t = rtc.getTime();  // refresh current time;
+  t->year = y2kYearToTm(t->year);
+  unsigned long tNow = makeTime(t);  // fetch current time from RTC as time_t
+  tNow += adjOffset * SECS_PER_HOUR;  // add or subtract new DST offset
+  breakTime(tNow, t);
+  t->year = tmYearToY2k(t->year);  // remove 1970 offset
+  rtc.setTime(t);  // adjust RTC
+  g_DST_offset = newOffset;
+  EEPROM.write(DST_OFFSET_POS, g_DST_offset);
+  g_DST_updated = true;
+}
+
+void set_date(uint8_t yy, uint8_t mm, uint8_t dd) {
+  t = rtc.getTime();
+  t->year = yy;
+  t->mon = mm;
+  t->mday = dd;
+  rtc.setTime(t);
+  DSTinit(t, &dst_rules);  // re-compute DST start, end for new date
+  g_DST_updated = false;  // allow automatic DST adjustment again
+  setDSToffset(g_DST_mode);  // set DSToffset based on new date
+}
+#endif
 
 void menu(bool update, bool show)
 {
@@ -327,6 +428,44 @@ void menu(bool update, bool show)
       }
       show_setting("24H", g_24h_clock ? " on" : " off", show);
       break;
+#ifdef FEATURE_AUTO_DST
+    case STATE_MENU_YEAR:
+      if (update) {
+        g_dateyear++;
+        if (g_dateyear > 29) g_dateyear = 10;
+        EEPROM.write(DATE_YEAR_POS, g_dateyear);
+        set_date(g_dateyear, g_datemonth, g_dateday);
+      }
+      show_setting("YEAR", g_dateyear, show);
+      break;
+    case STATE_MENU_MONTH:
+      if (update) {
+        g_datemonth++;
+        if (g_datemonth > 12) g_datemonth = 1;
+        EEPROM.write(DATE_MONTH_POS, g_datemonth);
+        set_date(g_dateyear, g_datemonth, g_dateday);
+      }
+      show_setting("MNTH", g_datemonth, show);
+      break;
+    case STATE_MENU_DAY:
+      if (update) {
+        g_dateday++;
+        if (g_dateday > 31) g_dateday = 1;
+        EEPROM.write(DATE_DAY_POS, g_dateday);
+        set_date(g_dateyear, g_datemonth, g_dateday);
+      }
+      show_setting("DAY", g_dateday, show);
+      break;
+    case STATE_MENU_DST:
+      if (update) {	
+        g_DST_mode = (g_DST_mode+1)%3;  //  0: off, 1: on, 2: auto
+        EEPROM.write(DST_MODE_POS, g_DST_mode);
+        g_DST_updated = false;  // allow automatic DST adjustment again
+        setDSToffset(g_DST_mode);
+      }
+      show_setting("DST", dst_setting(g_DST_mode), show);
+      break;
+#endif
     case STATE_MENU_TEMP:
       if (update) {
         g_show_temp = !g_show_temp;
@@ -347,6 +486,7 @@ void loop()
   // Counters used when setting time
   int16_t time_to_set = 0;
   uint16_t button_released_timer = 0;
+  uint16_t menu_timer = 0;
   uint16_t button_speed = 25;
 
   while (1) {
@@ -450,7 +590,7 @@ void loop()
     // Left button enters menu
     else if (clock_state == STATE_CLOCK && buttons.b2_keyup) {
       clock_state = STATE_MENU_BRIGHTNESS;
-      show_setting("BRIT", g_brightness, false);
+      menu(false, false);  // show first item in menu
       buttons.b2_keyup = 0; // clear state
     }
     // Right button toggles display mode
