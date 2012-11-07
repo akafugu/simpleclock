@@ -12,6 +12,12 @@
  * PARTICULAR PURPOSE.  See the GNU General Public License for more details.
  *
  */
+ 
+/* mods by William B. Phelps
+ *
+ * 06nov2012 - new menu code, 12 hour time display no leading zero
+ *
+ */
 
 #include <EEPROM.h>
 #include <Wire.h>
