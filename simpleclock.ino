@@ -63,6 +63,7 @@ typedef enum {
 } state_t;
 
 state_t clock_state = STATE_CLOCK;
+bool menu_b1_first = false;
 
 // display modes
 typedef enum {
@@ -148,12 +149,12 @@ void setup()
   disp.setBrightness(g_brightness*10);
 
   disp.print("----");
-  tone(9, NOTE_A4, 500);
-  delay(100);
-  tone(9, NOTE_C3, 750);
-  delay(100);
-  tone(9, NOTE_A4, 500);
-  delay(500);
+  tone(9, NOTE_A4, 100);
+  delay(200);  // 100 ms pause, tone() is asynchronous
+  tone(9, NOTE_A6, 100);
+  delay(200);
+  tone(9, NOTE_A4, 100);
+  delay(200);
   
   update_time();
 }
@@ -235,7 +236,7 @@ void update_display(uint8_t mode)
       if (g_24h_clock)
         disp.writeTime(t->hour, t->min, t->sec);
       else
-        disp.writeTime(t->twelveHour, t->min, t->sec);
+        disp.writeTime12h(t->hour, t->min, t->sec);
     }
     else if (clock_mode == MODE_SECONDS) {
       disp.setPosition(0);
@@ -296,6 +297,41 @@ void update_time()
   temp = read_meas();
 
   g_update_rtc = false;  
+}
+
+void menu(bool update, bool show)
+{
+  switch (clock_state) {
+    case STATE_MENU_BRIGHTNESS:
+      if (update) {
+        g_brightness++;
+      
+        if (g_brightness > 10) g_brightness = 1;
+
+        EEPROM.write(BRIGHTNESS_POS, g_brightness);
+        disp.setBrightness(g_brightness*10);
+      }
+      show_setting("BRIT", g_brightness, show);
+      break;
+    case STATE_MENU_24H:
+      if (update) {
+        g_24h_clock = !g_24h_clock;
+					
+        EEPROM.write(CLOCK_MODE_POS, g_24h_clock);	
+      }
+      show_setting("24H", g_24h_clock ? " on" : " off", show);
+      break;
+    case STATE_MENU_TEMP:
+      if (update) {
+        g_show_temp = !g_show_temp;
+        
+        EEPROM.write(SHOW_TEMP_POS, g_show_temp);
+      }
+      show_setting("TEMP", g_show_temp ? " on" : " off", show);
+      break;
+    default:
+      break; // do nothing
+  }
 }
 
 void loop()
@@ -428,60 +464,20 @@ void loop()
         clock_state = STATE_CLOCK;
       }
     
-      switch (clock_state) {
-        case STATE_MENU_BRIGHTNESS:
-          if (buttons.b1_keyup) {
-            g_brightness++;
-            buttons.b1_keyup = false;
-          
-            if (g_brightness > 10) g_brightness = 1;
-
-            EEPROM.write(BRIGHTNESS_POS, g_brightness);
-            show_setting("BRIT", g_brightness, true);
-            disp.setBrightness(g_brightness*10);
-          }
-	  break;
-        case STATE_MENU_24H:
-          if (buttons.b1_keyup) {
-            g_24h_clock = !g_24h_clock;
-					
-            EEPROM.write(CLOCK_MODE_POS, g_24h_clock);	
-            show_setting("24H", g_24h_clock ? " on" : " off", true);
-            buttons.b1_keyup = false;
-          }
-          break;
-        case STATE_MENU_TEMP:
-          if (buttons.b1_keyup) {
-            g_show_temp = !g_show_temp;
-            
-            EEPROM.write(SHOW_TEMP_POS, g_show_temp);
-            show_setting("TEMP", g_show_temp ? " on" : " off", true);
-            buttons.b1_keyup = false;
-          }
-          break;
-        default:
-          break; // do nothing
-      }
+      if (buttons.b1_keyup) {  // right button
+        menu(!menu_b1_first, true);
+        buttons.b1_keyup = false;
+        menu_b1_first = false;  // b1 not first time now
+      }  // if (buttons.b1_keyup) 
     
-      if (buttons.b2_keyup) {
+      if (buttons.b2_keyup) {  // left button
+        menu_b1_first = true;  // reset first time flag
         clock_state = (state_t)(clock_state + 1);
       
-        if (clock_state == STATE_MENU_LAST) clock_state = STATE_MENU_BRIGHTNESS;
+//        if (clock_state == STATE_MENU_LAST) clock_state = STATE_MENU_BRIGHTNESS;
+        if (clock_state == STATE_MENU_LAST) clock_state = STATE_CLOCK;  // 07nov12/wbp
       
-        switch (clock_state) {
-          case STATE_MENU_BRIGHTNESS:
-            show_setting("BRIT", g_brightness, false);
-            break;
-          case STATE_MENU_24H:
-            show_setting("24H", g_24h_clock ? " on" : " off", false);
-            break;
-            case STATE_MENU_TEMP:
-              show_setting("TEMP", g_show_temp ? " on" : " off", false);
-              break;
-            default:
-              break; // do nothing
-        }
-
+        menu(false, false);
         buttons.b2_keyup = 0; // clear state
       }
     }
