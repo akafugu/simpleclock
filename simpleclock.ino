@@ -15,6 +15,9 @@
  
 /* mods by William B. Phelps
  *
+ * 07nov2012 - port Auto DST from VFD clock, also show Alarm time when switch changed
+ * more distinct startup tones
+ *
  * 06nov2012 - new menu code, 12 hour time display no leading zero
  *
  */
@@ -46,6 +49,7 @@ bool g_update_rtc = true;
 uint8_t g_24h_clock = false;  // wbp temp ???
 uint8_t g_show_temp = false;
 uint8_t g_brightness = 10;
+uint8_t g_show_special_cnt = 10;  // show alarm time for 1 second
 
 #ifdef FEATURE_AUTO_DST
 uint8_t g_dateyear = 12;
@@ -64,9 +68,10 @@ const DST_Rules dst_rules_lo = {{1,1,1,0},{1,1,1,0},0};  // low limit
 const DST_Rules dst_rules_hi = {{12,7,5,23},{12,7,5,23},1};  // high limit
 #endif
 
-#define CLOCK_MODE_POS 0
+#define S24H_MODE_POS 0
 #define SHOW_TEMP_POS 1
 #define BRIGHTNESS_POS 2
+
 #ifdef FEATURE_AUTO_DST
 #define DATE_YEAR_POS 3
 #define DATE_MONTH_POS 4
@@ -111,7 +116,9 @@ typedef enum {
   MODE_NORMAL = 0, // HH.MM
   MODE_SECONDS,    //  SS 
   MODE_TEMP,       // XX.XC
-  MODE_LAST,
+  MODE_LAST,  // end of display modes for right button pushes
+  MODE_ALARM_TEXT,  // "ALRM"
+  MODE_ALARM_TIME,  // HH.MM
 } display_mode_t;
 
 display_mode_t clock_mode = MODE_NORMAL;
@@ -182,7 +189,7 @@ void setup()
   PCMSK2 |= (1 << PCINT21);
   
   
-  g_24h_clock = EEPROM.read(CLOCK_MODE_POS);	
+  g_24h_clock = EEPROM.read(S24H_MODE_POS);	
   g_show_temp = EEPROM.read(SHOW_TEMP_POS);	
   g_brightness = EEPROM.read(BRIGHTNESS_POS);
 
@@ -216,9 +223,13 @@ void setup()
 // Alarm switch changed / SQW interrupt
 ISR( PCINT2_vect )
 {
-  g_alarm_switch = !digitalRead(ALARM_SWITCH_PIN);
+  uint8_t sw = !digitalRead(ALARM_SWITCH_PIN);
+  if (sw != g_alarm_switch) {  // switch changed?
+    g_alarm_switch = sw;
+    clock_mode = MODE_ALARM_TEXT;
+    g_show_special_cnt = 10;  // show alarm text for 1 second
+  }
   g_update_rtc = true;
-
   g_blank = digitalRead(SQW_PIN);
 }
 
@@ -281,11 +292,24 @@ void alarm()
 
 void update_display(uint8_t mode)
 {
+  uint8_t hour = 0, min = 0, sec = 0;
   static uint8_t counter = 0;
-  
   disp.setDot(3, g_alarm_switch);
-  
-  if (!g_show_temp || counter < 40) {
+  if (clock_mode == MODE_ALARM_TEXT) {
+    disp.clear();
+    disp.print("ALRM");
+  }
+  else if (clock_mode == MODE_ALARM_TIME) {
+    disp.setDot(1, false);
+    if (g_alarm_switch) {
+      rtc.getAlarm_s(&hour, &min, &sec);
+      disp.writeTime(hour, min, sec);
+    }
+    else {
+      disp.print("OFF ");
+    }
+  }
+  else if (!g_show_temp || counter < 40) {
     if (clock_mode == MODE_NORMAL) {
       if (g_24h_clock)
         disp.writeTime(t->hour, t->min, t->sec);
@@ -294,7 +318,6 @@ void update_display(uint8_t mode)
     }
     else if (clock_mode == MODE_SECONDS) {
       disp.setPosition(0);
-
       if (g_24h_clock) {
         disp.print(' ');
         print2(t->sec);
@@ -313,7 +336,6 @@ void update_display(uint8_t mode)
   else {
     print_temp();
   }
-
   counter++;
   if (counter == 80) counter = 0;
 }
@@ -424,7 +446,7 @@ void menu(bool update, bool show)
       if (update) {
         g_24h_clock = !g_24h_clock;
 					
-        EEPROM.write(CLOCK_MODE_POS, g_24h_clock);	
+        EEPROM.write(S24H_MODE_POS, g_24h_clock);	
       }
       show_setting("24H", g_24h_clock ? " on" : " off", show);
       break;
@@ -628,6 +650,21 @@ void loop()
       }
     }
     else {
+      if (g_show_special_cnt>0) {
+	g_show_special_cnt--;
+	if (g_show_special_cnt == 0)
+          switch (clock_mode) {
+            case MODE_ALARM_TEXT:
+              clock_mode = MODE_ALARM_TIME;
+              g_show_special_cnt = 10;  // now show time for 1 second
+              break;
+            case MODE_ALARM_TIME:
+              clock_mode = MODE_NORMAL;
+              break;
+            default:
+              clock_mode = MODE_NORMAL;
+          }
+      }
       update_display(clock_mode);
       delay(100);
     }
