@@ -21,7 +21,7 @@
  * 06nov2012 - new menu code, 12 hour time display no leading zero
  *
  */
- 
+
 //#define FEATURE_AUTO_DST
 
 #include <EEPROM.h>
@@ -34,7 +34,7 @@
 #include "pitches.h"
 #ifdef FEATURE_AUTO_DST
 #include "adst.h"
-#endif
+#endif // FEATURE_AUTO_DST 
 
 WireRtcLib rtc;
 
@@ -45,6 +45,7 @@ struct BUTTON_STATE buttons;
 uint8_t g_alarming = false; // alarm is going off
 uint8_t g_alarm_switch;
 bool g_update_rtc = true;
+bool g_update_scroll = false;
 
 // Cached settings
 uint8_t g_24h_clock = false;  // wbp temp ???
@@ -55,6 +56,7 @@ uint8_t g_show_special_cnt = 10;  // show alarm time for 1 second
 uint8_t g_dateyear = 12;
 uint8_t g_datemonth = 1;
 uint8_t g_dateday = 1;
+uint8_t g_autodate = TRUE;
 
 #ifdef FEATURE_AUTO_DST
 uint8_t g_DST_mode;  // DST off, on, auto?
@@ -68,7 +70,7 @@ DST_Rules dst_rules = {{3,1,2,2},{11,1,1,2},1};   // initial values from US DST 
 // Current US Rules:  March, Sunday, 2nd, 2am, November, Sunday, 1st, 2 am, 1 hour
 const DST_Rules dst_rules_lo = {{1,1,1,0},{1,1,1,0},0};  // low limit
 const DST_Rules dst_rules_hi = {{12,7,5,23},{12,7,5,23},1};  // high limit
-#endif
+#endif // FEATURE_AUTO_DST 
 
 #define S24H_MODE_POS 0
 #define SHOW_TEMP_POS 1
@@ -81,7 +83,9 @@ const DST_Rules dst_rules_hi = {{12,7,5,23},{12,7,5,23},1};  // high limit
 #define DST_MODE_POS 6
 #define DST_OFFSET_POS 7
 #define DST_UPDATED_POS 8
-#endif
+#endif // FEATURE_AUTO_DST 
+
+#define AUTODATE_POS 9
 
 #define SQW_PIN 2
 #define BUTTON_1_PIN 3
@@ -103,9 +107,10 @@ typedef enum {
   STATE_MENU_YEAR,
   STATE_MENU_MONTH,
   STATE_MENU_DAY,
+  STATE_MENU_AUTODATE,
 #ifdef FEATURE_AUTO_DST
   STATE_MENU_DST,
-#endif 
+#endif // FEATURE_AUTO_DST  
   STATE_MENU_TEMP,
   STATE_MENU_LAST,
 } state_t;
@@ -121,6 +126,7 @@ typedef enum {
   MODE_LAST,  // end of display modes for right button pushes
   MODE_ALARM_TEXT,  // "ALRM"
   MODE_ALARM_TIME,  // HH.MM
+  MODE_AUTO_DATE,   // scroll date across the screen
 } display_mode_t;
 
 display_mode_t clock_mode = MODE_NORMAL;
@@ -128,13 +134,21 @@ display_mode_t clock_mode = MODE_NORMAL;
 bool g_blink; // flag to control when to blink the display
 bool g_blank; // flag to control if the display is to blanked out or not
 
+String g_date_string; // string holding the date to scroll across the screen in ADATE mode
+uint8_t g_date_scroll_offset; // offset used when scrolling date across the screen
+
+
 #define MENU_TIMEOUT 200  // (160?)
 
 WireRtcLib::tm* t;
 uint16_t temp;
 
+char* adate_text[10];
+
 void setup()
 {
+  Serial.begin(9600);
+  
   pinMode(PIEZO_1, OUTPUT);
   pinMode(PIEZO_2, OUTPUT);
   digitalWrite(PIEZO_2, LOW);
@@ -190,7 +204,6 @@ void setup()
   PCMSK2 |= (1 << PCINT18);
   PCMSK2 |= (1 << PCINT21);
   
-  
   g_24h_clock = EEPROM.read(S24H_MODE_POS);	
   g_show_temp = EEPROM.read(SHOW_TEMP_POS);	
   g_brightness = EEPROM.read(BRIGHTNESS_POS);
@@ -207,7 +220,7 @@ void setup()
   g_DST_offset = EEPROM.read(DST_OFFSET_POS);
   if (g_DST_offset>1)  g_DST_offset = 0;
   g_DST_updated = EEPROM.read(DST_UPDATED_POS);
-#endif
+#endif // FEATURE_AUTO_DST 
 
   if (g_brightness > 10 || g_brightness < 0) g_brightness = 10;
   disp.setBrightness(g_brightness*10);
@@ -233,6 +246,7 @@ ISR( PCINT2_vect )
     g_show_special_cnt = 10;  // show alarm text for 1 second
   }
   g_update_rtc = true;
+  g_update_scroll = true;
   g_blank = digitalRead(SQW_PIN);
 }
 
@@ -296,8 +310,8 @@ void alarm()
 void update_display(uint8_t mode)
 {
   uint8_t hour = 0, min = 0, sec = 0;
-  static uint8_t counter = 0;
   disp.setDot(3, g_alarm_switch);
+
   if (clock_mode == MODE_ALARM_TEXT) {
     disp.clear();
     disp.print("ALRM");
@@ -312,35 +326,53 @@ void update_display(uint8_t mode)
       disp.print("OFF ");
     }
   }
-  else if (!g_show_temp || counter < 40) {
-    if (clock_mode == MODE_NORMAL) {
+  // show temperature for a few seconds each minute (depending on TEMP setting)
+  else if (g_show_temp && 
+           (clock_mode == MODE_NORMAL || clock_mode == MODE_SECONDS) && 
+           t->sec >= 45 &&t->sec <= 49) {
+    print_temp();
+  }
+  // scroll date across the screen once a minute (depending on ADTE setting)
+  else if (g_autodate && clock_mode == MODE_NORMAL &&t->sec == 5) {
+    disp.setDot(1, false);
+    disp.clear();
+    disp.setScrollMode();
+    clock_mode = MODE_AUTO_DATE;
+  }
+  else if (clock_mode == MODE_NORMAL) {
       if (g_24h_clock)
         disp.writeTime(t->hour, t->min, t->sec);
       else
         disp.writeTime12h(t->twelveHour, t->min, t->sec);
-    }
-    else if (clock_mode == MODE_SECONDS) {
-      disp.setPosition(0);
-      if (g_24h_clock) {
-        disp.print(' ');
-        print2(t->sec);
-        disp.print(' ');
-      }
-      else {
-        disp.print(t->am ? "AM" : "PM");
-        print2(t->sec);
-      }
-      disp.setDot(1, false);
+  }
+  else if (clock_mode == MODE_SECONDS) {
+    disp.setPosition(0);
+    if (g_24h_clock) {
+      disp.print(' ');
+      print2(t->sec);
+      disp.print(' ');
     }
     else {
-      print_temp();
+      disp.print(t->am ? "AM" : "PM");
+      print2(t->sec);
+    }
+    disp.setDot(1, false);    
+  }
+  else if (clock_mode == MODE_TEMP) {
+    print_temp();    
+  }
+  else if (clock_mode == MODE_AUTO_DATE) {
+    if (g_date_scroll_offset == 13) { // finished scrolling, go back to normal
+      disp.setRotateMode();
+      clock_mode = MODE_NORMAL;
+    }
+        
+    if (g_update_scroll) {
+      disp.print(g_date_string[g_date_scroll_offset]);
+      g_date_scroll_offset++;
+      g_update_scroll = false;
     }
   }
-  else {
-    print_temp();
-  }
-  counter++;
-  if (counter == 80) counter = 0;
 }
 
 void set_blink(bool on)
@@ -366,10 +398,30 @@ void show_setting(const char* str, const char* value, bool show_setting)
     disp.print(str);
 }
 
+void update_date_string(WireRtcLib::tm* t)
+{
+  if (!t) return;
+  
+  String temp;
+  temp.concat(t->year+2000);
+  temp.concat('-');
+  temp.concat(t->mon);
+  temp.concat('-');
+  temp.concat(t->mday);
+  temp.concat("    ");
+
+  g_date_string = temp;
+  
+  Serial.println(g_date_string);
+}
+
 void update_time()
 {
   // update time
   t = rtc.getTime();
+  
+  // update date string
+  update_date_string(t);
       
   // Read temperature from 1-wire temperature sensor
   start_meas();
@@ -386,7 +438,7 @@ void update_time()
     g_DST_updated = false;
     DSTinit(t, &dst_rules);  // re-compute DST start, end
   }
-#endif
+#endif // FEATURE_AUTO_DST 
 
   g_update_rtc = false;  
 }
@@ -432,7 +484,7 @@ void set_date(uint8_t yy, uint8_t mm, uint8_t dd) {
   DSTinit(t, &dst_rules);  // re-compute DST start, end for new date
   g_DST_updated = false;  // allow automatic DST adjustment again
   setDSToffset(g_DST_mode);  // set DSToffset based on new date
-#endif
+#endif // FEATURE_AUTO_DST 
 }
 
 void menu(bool update, bool show)
@@ -484,6 +536,15 @@ void menu(bool update, bool show)
       }
       show_setting("DAY", g_dateday, show);
       break;
+    case STATE_MENU_AUTODATE:
+      if (update) {
+        g_autodate = !g_autodate;
+        
+        EEPROM.write(AUTODATE_POS, g_autodate);
+      }
+    
+      show_setting("ADTE", g_autodate ? " on" : " off", show);
+      break;
 #ifdef FEATURE_AUTO_DST
     case STATE_MENU_DST:
       if (update) {	
@@ -494,7 +555,7 @@ void menu(bool update, bool show)
       }
       show_setting("DST", dst_setting(g_DST_mode), show);
       break;
-#endif
+#endif // FEATURE_AUTO_DST 
     case STATE_MENU_TEMP:
       if (update) {
         g_show_temp = !g_show_temp;
@@ -644,7 +705,6 @@ void loop()
         buttons.b1_keyup = false;
         menu_b1_first = false;  // b1 not first time now
       }  // if (buttons.b1_keyup) 
-    
       if (buttons.b2_keyup) {  // left button
         menu_b1_first = true;  // reset first time flag
         clock_state = (state_t)(clock_state + 1);
