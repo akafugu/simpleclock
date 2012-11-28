@@ -21,7 +21,8 @@
  * 06nov2012 - new menu code, 12 hour time display no leading zero
  *
  */
-#define FEATURE_AUTO_DST
+ 
+//#define FEATURE_AUTO_DST
 
 #include <EEPROM.h>
 #include <Wire.h>
@@ -51,10 +52,11 @@ uint8_t g_show_temp = false;
 uint8_t g_brightness = 10;
 uint8_t g_show_special_cnt = 10;  // show alarm time for 1 second
 
-#ifdef FEATURE_AUTO_DST
 uint8_t g_dateyear = 12;
 uint8_t g_datemonth = 1;
 uint8_t g_dateday = 1;
+
+#ifdef FEATURE_AUTO_DST
 uint8_t g_DST_mode;  // DST off, on, auto?
 uint8_t g_DST_offset;  // DST offset in Hours
 uint8_t g_DST_updated = false;  // DST update flag = allow update only once per day
@@ -71,11 +73,11 @@ const DST_Rules dst_rules_hi = {{12,7,5,23},{12,7,5,23},1};  // high limit
 #define S24H_MODE_POS 0
 #define SHOW_TEMP_POS 1
 #define BRIGHTNESS_POS 2
-
-#ifdef FEATURE_AUTO_DST
 #define DATE_YEAR_POS 3
 #define DATE_MONTH_POS 4
 #define DATE_DAY_POS 5
+
+#ifdef FEATURE_AUTO_DST
 #define DST_MODE_POS 6
 #define DST_OFFSET_POS 7
 #define DST_UPDATED_POS 8
@@ -98,10 +100,10 @@ typedef enum {
   // menu
   STATE_MENU_BRIGHTNESS,
   STATE_MENU_24H,
-#ifdef FEATURE_AUTO_DST
   STATE_MENU_YEAR,
   STATE_MENU_MONTH,
   STATE_MENU_DAY,
+#ifdef FEATURE_AUTO_DST
   STATE_MENU_DST,
 #endif 
   STATE_MENU_TEMP,
@@ -193,13 +195,14 @@ void setup()
   g_show_temp = EEPROM.read(SHOW_TEMP_POS);	
   g_brightness = EEPROM.read(BRIGHTNESS_POS);
 
-#ifdef FEATURE_AUTO_DST
   g_dateyear = EEPROM.read(DATE_YEAR_POS);
   if (g_dateyear>29)  g_dateyear = 12;
   g_datemonth = EEPROM.read(DATE_MONTH_POS);
   if (g_datemonth>12)  g_dateyear = 1;
   g_dateday = EEPROM.read(DATE_DAY_POS);
   if (g_dateday>31)  g_dateyear = 1;
+
+#ifdef FEATURE_AUTO_DST
   g_DST_mode = EEPROM.read(DST_MODE_POS);
   g_DST_offset = EEPROM.read(DST_OFFSET_POS);
   if (g_DST_offset>1)  g_DST_offset = 0;
@@ -372,10 +375,11 @@ void update_time()
   start_meas();
   temp = read_meas();
 
-#ifdef FEATURE_AUTO_DST
   g_dateyear = t->year;  // save year for Menu
   g_datemonth = t->mon;  // save month for Menu
   g_dateday = t->mday;  // save day for Menu
+
+#ifdef FEATURE_AUTO_DST
   if (t->sec%10 == 0)  // check DST Offset every 10 seconds
     setDSToffset(g_DST_mode); 
   if ((t->hour == 0) && (t->min == 0) && (t->sec == 0)) {  // MIDNIGHT!
@@ -415,6 +419,7 @@ void setDSToffset(uint8_t mode) {
   EEPROM.write(DST_OFFSET_POS, g_DST_offset);
   g_DST_updated = true;
 }
+#endif // FEATURE_AUTO_DST
 
 void set_date(uint8_t yy, uint8_t mm, uint8_t dd) {
   t = rtc.getTime();
@@ -422,11 +427,13 @@ void set_date(uint8_t yy, uint8_t mm, uint8_t dd) {
   t->mon = mm;
   t->mday = dd;
   rtc.setTime(t);
+  
+#ifdef FEATURE_AUTO_DST
   DSTinit(t, &dst_rules);  // re-compute DST start, end for new date
   g_DST_updated = false;  // allow automatic DST adjustment again
   setDSToffset(g_DST_mode);  // set DSToffset based on new date
-}
 #endif
+}
 
 void menu(bool update, bool show)
 {
@@ -450,7 +457,6 @@ void menu(bool update, bool show)
       }
       show_setting("24H", g_24h_clock ? " on" : " off", show);
       break;
-#ifdef FEATURE_AUTO_DST
     case STATE_MENU_YEAR:
       if (update) {
         g_dateyear++;
@@ -478,6 +484,7 @@ void menu(bool update, bool show)
       }
       show_setting("DAY", g_dateday, show);
       break;
+#ifdef FEATURE_AUTO_DST
     case STATE_MENU_DST:
       if (update) {	
         g_DST_mode = (g_DST_mode+1)%3;  //  0: off, 1: on, 2: auto
