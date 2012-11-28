@@ -56,7 +56,7 @@ uint8_t g_show_special_cnt = 10;  // show alarm time for 1 second
 uint8_t g_dateyear = 12;
 uint8_t g_datemonth = 1;
 uint8_t g_dateday = 1;
-uint8_t g_autodate = TRUE;
+uint8_t g_autodate = true;
 
 #ifdef FEATURE_AUTO_DST
 uint8_t g_DST_mode;  // DST off, on, auto?
@@ -86,6 +86,7 @@ const DST_Rules dst_rules_hi = {{12,7,5,23},{12,7,5,23},1};  // high limit
 #endif // FEATURE_AUTO_DST 
 
 #define AUTODATE_POS 9
+#define REGION_POS 10
 
 #define SQW_PIN 2
 #define BUTTON_1_PIN 3
@@ -108,6 +109,7 @@ typedef enum {
   STATE_MENU_MONTH,
   STATE_MENU_DAY,
   STATE_MENU_AUTODATE,
+  STATE_MENU_REGION,
 #ifdef FEATURE_AUTO_DST
   STATE_MENU_DST,
 #endif // FEATURE_AUTO_DST  
@@ -130,6 +132,15 @@ typedef enum {
 } display_mode_t;
 
 display_mode_t clock_mode = MODE_NORMAL;
+
+// date format modes
+typedef enum {
+  FORMAT_YMD = 0,
+  FORMAT_DMY,
+  FORMAT_MDY,
+} date_format_t;
+
+date_format_t g_date_format = FORMAT_YMD;
 
 bool g_blink; // flag to control when to blink the display
 bool g_blank; // flag to control if the display is to blanked out or not
@@ -362,12 +373,12 @@ void update_display(uint8_t mode)
     print_temp();    
   }
   else if (clock_mode == MODE_AUTO_DATE) {
-    if (g_date_scroll_offset == 13) { // finished scrolling, go back to normal
+    if (g_date_scroll_offset == 14) { // finished scrolling, go back to normal
+      g_date_scroll_offset = 0;
       disp.setRotateMode();
       clock_mode = MODE_NORMAL;
     }
-        
-    if (g_update_scroll) {
+    else if (g_update_scroll) {
       disp.print(g_date_string[g_date_scroll_offset]);
       g_date_scroll_offset++;
       g_update_scroll = false;
@@ -403,11 +414,31 @@ void update_date_string(WireRtcLib::tm* t)
   if (!t) return;
   
   String temp;
-  temp.concat(t->year+2000);
-  temp.concat('-');
-  temp.concat(t->mon);
-  temp.concat('-');
-  temp.concat(t->mday);
+  
+  switch (g_date_format) {
+  case FORMAT_YMD:
+    temp.concat(t->year+2000);
+    temp.concat('-');
+    temp.concat(t->mon);
+    temp.concat('-');
+    temp.concat(t->mday);
+    break;
+  case FORMAT_DMY:
+    temp.concat(t->mday);
+    temp.concat('-');
+    temp.concat(t->mon);
+    temp.concat('-');
+    temp.concat(t->year+2000);
+    break;
+  case FORMAT_MDY:
+    temp.concat(t->mon);
+    temp.concat('-');
+    temp.concat(t->mday);
+    temp.concat('-');
+    temp.concat(t->year+2000);
+    break;
+  }
+
   temp.concat("    ");
 
   g_date_string = temp;
@@ -545,6 +576,26 @@ void menu(bool update, bool show)
     
       show_setting("ADTE", g_autodate ? " on" : " off", show);
       break;
+    case STATE_MENU_REGION:
+      if (update) {
+        if (g_date_format == FORMAT_YMD)
+          g_date_format = FORMAT_MDY;
+        else if (g_date_format == FORMAT_MDY)
+          g_date_format = FORMAT_DMY;
+        else if (g_date_format == FORMAT_DMY)
+          g_date_format = FORMAT_YMD;
+        
+        EEPROM.write(REGION_POS, g_date_format);
+      }
+    
+      if (g_date_format == FORMAT_YMD)
+        show_setting("REGN", "YMD", show);
+      else if (g_date_format == FORMAT_MDY)
+        show_setting("REGN", "MDY", show);
+      else if (g_date_format == FORMAT_DMY)
+        show_setting("REGN", "DMY", show);
+      
+      break;
 #ifdef FEATURE_AUTO_DST
     case STATE_MENU_DST:
       if (update) {	
@@ -679,15 +730,25 @@ void loop()
     }
     // Left button enters menu
     else if (clock_state == STATE_CLOCK && buttons.b2_keyup) {
+      // make sure to force-exit auto date mode when entering menu
+      if (clock_mode == MODE_AUTO_DATE)
+        clock_mode = MODE_NORMAL;
+      
       clock_state = STATE_MENU_BRIGHTNESS;
       menu(false, false);  // show first item in menu
       buttons.b2_keyup = 0; // clear state
     }
     // Right button toggles display mode
     else if (clock_state == STATE_CLOCK && buttons.b1_keyup) {
-      clock_mode = (display_mode_t)(clock_mode + 1);
-      if (clock_mode == MODE_LAST) clock_mode = MODE_NORMAL;
-        buttons.b1_keyup = 0; // clear state
+      // special handling for auto date mode: exit back to normal mode
+      if (clock_mode == MODE_AUTO_DATE) {
+        clock_mode = MODE_NORMAL;
+      }
+      else {
+        clock_mode = (display_mode_t)(clock_mode + 1);
+        if (clock_mode == MODE_LAST) clock_mode = MODE_NORMAL;
+          buttons.b1_keyup = 0; // clear state
+      }
     }
     else if (clock_state >= STATE_MENU_BRIGHTNESS) {
       if (buttons.none_held)
