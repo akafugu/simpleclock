@@ -158,7 +158,7 @@ char* adate_text[10];
 
 void setup()
 {
-  Serial.begin(9600);
+  //Serial.begin(9600);
   
   pinMode(PIEZO_1, OUTPUT);
   pinMode(PIEZO_2, OUTPUT);
@@ -332,7 +332,7 @@ void update_display(uint8_t mode)
     if (g_alarm_switch) {
       rtc.getAlarm_s(&hour, &min, &sec);
       disp.writeTime(hour, min, sec);
-    }
+    }  
     else {
       disp.print("OFF ");
     }
@@ -443,7 +443,7 @@ void update_date_string(WireRtcLib::tm* t)
 
   g_date_string = temp;
   
-  Serial.println(g_date_string);
+  // Serial.println(g_date_string);
 }
 
 void update_time()
