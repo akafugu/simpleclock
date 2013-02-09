@@ -424,7 +424,7 @@ void update_date_string(WireRtcLib::tm* t)
     temp.concat(t->mday);
     break;
   case FORMAT_DMY:
-    if (t->mday < 10) temp.concat('0');　
+    if (t->mday < 10) temp.concat('0');
     temp.concat(t->mday);
     temp.concat('-');
     if (t->mon < 10) temp.concat('0');
