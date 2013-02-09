@@ -154,8 +154,6 @@ uint8_t g_date_scroll_offset; // offset used when scrolling date across the scre
 WireRtcLib::tm* t;
 uint16_t temp;
 
-char* adate_text[10];
-
 void setup()
 {
   //Serial.begin(9600);
@@ -419,20 +417,26 @@ void update_date_string(WireRtcLib::tm* t)
   case FORMAT_YMD:
     temp.concat(t->year+2000);
     temp.concat('-');
+    if (t->mon < 10) temp.concat('0');
     temp.concat(t->mon);
     temp.concat('-');
+    if (t->mday < 10) temp.concat('0');    
     temp.concat(t->mday);
     break;
   case FORMAT_DMY:
+    if (t->mday < 10) temp.concat('0');　
     temp.concat(t->mday);
     temp.concat('-');
+    if (t->mon < 10) temp.concat('0');
     temp.concat(t->mon);
     temp.concat('-');
     temp.concat(t->year+2000);
     break;
   case FORMAT_MDY:
+    if (t->mon < 10) temp.concat('0');
     temp.concat(t->mon);
     temp.concat('-');
+    if (t->mday < 10) temp.concat('0');
     temp.concat(t->mday);
     temp.concat('-');
     temp.concat(t->year+2000);
